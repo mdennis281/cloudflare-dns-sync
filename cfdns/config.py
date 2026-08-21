@@ -13,9 +13,12 @@ import os
 from configparser import ConfigParser
 from pathlib import Path
 
+from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 CONFIG_ENV_VAR = "CF_DNS_CONFIG"
+TOKEN_ENV_VAR = "CLOUDFLARE_API_TOKEN"
+ENV_FILENAME = ".env"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -58,6 +61,7 @@ class Config(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     token: str
+    token_source: str = ""  # where the token came from, for messages
     site_name: str = ""
     records: tuple[Record, ...]
     source: Path
@@ -73,7 +77,12 @@ class Config(BaseModel):
     @model_validator(mode="after")
     def _check(self) -> "Config":
         if not self.token:
-            raise ValueError(f"[CloudFlare-API] token is not set in {self.source}")
+            raise ValueError(
+                "no Cloudflare API token found. Put it in "
+                f"{self.source.parent / ENV_FILENAME} as:\n"
+                f"  {TOKEN_ENV_VAR}=your-token-here\n"
+                f"(or export {TOKEN_ENV_VAR} in the environment)"
+            )
         if not self.records:
             raise ValueError(
                 f"no DNS records configured in {self.source}. "
@@ -102,6 +111,36 @@ class Config(BaseModel):
         """Relative log paths are resolved against the config file's directory."""
         path = Path(self.log_path).expanduser()
         return path if path.is_absolute() else self.source.parent / path
+
+
+def find_env_file(config_path: Path) -> Path | None:
+    """The .env beside config.ini, else the one in the project root."""
+    for candidate in (config_path.parent / ENV_FILENAME, PROJECT_ROOT / ENV_FILENAME):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def resolve_token(config_path: Path, from_ini: str = "") -> tuple[str, str]:
+    """Find the API token and report where it came from.
+
+    A real environment variable wins so systemd/CI can inject one; then the
+    .env file; then config.ini, which is the deprecated pre-2.1 location.
+    """
+    from_environment = os.environ.get(TOKEN_ENV_VAR, "").strip()
+    if from_environment:
+        return from_environment, f"${TOKEN_ENV_VAR}"
+
+    env_file = find_env_file(config_path)
+    if env_file is not None:
+        token = (dotenv_values(env_file).get(TOKEN_ENV_VAR) or "").strip()
+        if token:
+            return token, str(env_file)
+
+    if from_ini:
+        return from_ini, "config.ini"
+
+    return "", ""
 
 
 def find_config(explicit: str | os.PathLike[str] | None = None) -> Path:
@@ -163,8 +202,12 @@ def load(explicit: str | os.PathLike[str] | None = None) -> Config:
                 name = section.split(":", 1)[1].strip()
                 records.append(Record(**_read_record(parser, section, name, defaults)))
 
+        token, token_source = resolve_token(
+            path, parser.get("CloudFlare-API", "token", fallback="").strip()
+        )
         return Config(
-            token=parser.get("CloudFlare-API", "token", fallback=""),
+            token=token,
+            token_source=token_source,
             site_name=parser.get("CloudFlare-API", "siteName", fallback=""),
             records=tuple(records),
             source=path,

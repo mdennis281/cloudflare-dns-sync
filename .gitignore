@@ -8,4 +8,5 @@ dist/
 .worktrees/
 .venv/
 config.ini
+.env
 CF-DNS.log

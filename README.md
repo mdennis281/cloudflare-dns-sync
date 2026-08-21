@@ -6,6 +6,7 @@ I created this as a solution to the annoyingly short DHCP leases handed out by m
 
 ## Features
 - Guided setup that verifies your API token before writing anything
+- API token kept in `.env`, separate from the record config
 - **Syncs as many records as you like**, across as many zones as you like, in one run
 - IPv4 (`A`) and IPv6 (`AAAA`) records
 - Creates records that don't exist yet, and leaves already-correct records alone
@@ -43,16 +44,16 @@ https://dash.cloudflare.com/profile/api-tokens with these two permissions:
 *    Zone   Zone   Read
 *    Zone   DNS    Edit
 
-Setup finishes by pointing you at `config.ini`, where you list the records you
-want synced. That file is gitignored, so your token stays out of version control.
+Setup writes the token to `.env` and points you at `config.ini`, where you list
+the records you want synced. Both files are gitignored.
 
 ### Uninstall
 ```bash
 ./setup.sh --uninstall          # Linux / macOS
 .\setup.ps1 -Uninstall          # Windows
 ```
-This removes the scheduled job and the `.venv`, and asks before deleting
-`config.ini` and any log files. Add `--purge` / `-Purge` to skip the questions.
+This removes the scheduled job and the `.venv`, and asks before deleting `.env`,
+`config.ini`, and any log files. Add `--purge` / `-Purge` to skip the questions.
 It does **not** revoke your API token — do that in the Cloudflare dashboard.
 
 Everything lives inside the project directory, so if you'd rather remove it by
@@ -69,12 +70,36 @@ Python.
 python3 -m venv .venv
 . .venv/bin/activate           # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-cp config.example.ini config.ini   # then edit it
+cp .env.example .env               # then paste in your API token
+cp config.example.ini config.ini   # then list your records
 python main.py -v
 ```
 
 Schedule it yourself with cron or Task Scheduler (see below), or let the
 installer do just that part: `python install.py`.
+
+## The API token
+
+The token lives in `.env`, not in `config.ini`:
+
+```dotenv
+CLOUDFLARE_API_TOKEN=fJldweoEslakCwpLsaecCeroscorlaecp
+```
+
+It's looked for in this order:
+
+1. An exported `CLOUDFLARE_API_TOKEN` environment variable — handy for systemd
+   units, containers, or CI, which can inject one without a file on disk.
+2. `.env` next to `config.ini`, then `.env` in the project root.
+3. `[CloudFlare-API] token` in `config.ini`. This is the pre-2.1 location and
+   still works, but it logs a warning telling you to move it.
+
+`CLOUDFLARE_API_TOKEN` is the same variable name Wrangler and the Cloudflare
+Terraform provider use, so an already-exported token works with no setup.
+
+> Cron and Task Scheduler don't inherit your shell's environment, so for
+> scheduled runs the token needs to be in `.env` (or exported by whatever
+> supervises the job) — not just `export`ed in your `.bashrc`.
 
 ## Configuration
 
@@ -83,7 +108,7 @@ the defaults every record inherits, so shared settings only need writing once.
 
 ```ini
 [CloudFlare-API]
-token = fJldweoEslakCwpLsaecCeroscorlaecp
+; the token goes in .env, not here
 ; default zone for every record below
 siteName = mydomain.com
 

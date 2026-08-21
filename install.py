@@ -2,7 +2,7 @@
 # Author: Michael Dennis (https://github.com/mdennis281)
 # Project Repository: https://github.com/mdennis281/cloudflare-dns-sync
 # License: MIT (https://en.wikipedia.org/wiki/MIT_License)
-"""Interactive setup: verify an API token, pick a schedule, write config.ini.
+"""Interactive setup: verify an API token, pick a schedule, write .env + config.ini.
 
 Normally launched by setup.sh / setup.ps1, which build the venv first.
 Removing the venv is those scripts' job, not this one's -- on Windows a
@@ -22,10 +22,13 @@ from pathlib import Path
 
 from cfdns import schedule
 from cfdns.cloudflare import Cloudflare, CloudflareError
+from cfdns.config import TOKEN_ENV_VAR
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.ini"
 EXAMPLE = ROOT / "config.example.ini"
+ENV_FILE = ROOT / ".env"
+ENV_EXAMPLE = ROOT / ".env.example"
 
 FREQUENCIES = [
     ("every 5 minutes", 5),
@@ -100,22 +103,78 @@ def set_ini_values(text: str, section: str, values: dict[str, str]) -> str:
     return "\n".join(out) + "\n"
 
 
-def write_config(token: str, site_name: str) -> None:
+def remove_ini_keys(text: str, section: str, keys: set[str]) -> tuple[str, bool]:
+    """Drop `key = value` lines from one section. Returns (text, removed_any)."""
+    out: list[str] = []
+    current = None
+    removed = False
+    wanted = {key.lower() for key in keys}
+
+    for line in text.splitlines():
+        header = re.match(r"\s*\[(?P<name>[^\]]+)\]\s*$", line)
+        if header:
+            current = header.group("name")
+            out.append(line)
+            continue
+
+        if current == section:
+            match = re.match(r"\s*(?P<key>[A-Za-z_][\w-]*)\s*=", line)
+            if match and match.group("key").lower() in wanted:
+                removed = True
+                continue
+        out.append(line)
+
+    return "\n".join(out) + "\n", removed
+
+
+def set_env_value(text: str, key: str, value: str) -> str:
+    """Set KEY=value in a .env body, keeping comments and other variables."""
+    out: list[str] = []
+    seen = False
+
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(f"{key}=") or stripped.startswith(f"export {key}="):
+            if seen:
+                continue  # drop duplicate definitions
+            out.append(f"{key}={value}")
+            seen = True
+            continue
+        out.append(line)
+
+    if not seen:
+        out.append(f"{key}={value}")
+    return "\n".join(out) + "\n"
+
+
+def write_env(token: str) -> None:
+    if not ENV_FILE.exists() and ENV_EXAMPLE.exists():
+        shutil.copyfile(ENV_EXAMPLE, ENV_FILE)
+        say(f"  created {ENV_FILE.name} from {ENV_EXAMPLE.name}")
+
+    body = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
+    ENV_FILE.write_text(set_env_value(body, TOKEN_ENV_VAR, token), encoding="utf-8")
+    if os.name != "nt":  # the file holds an API token
+        ENV_FILE.chmod(0o600)
+    say(f"  token saved to {ENV_FILE.name}")
+
+
+def write_config(site_name: str) -> None:
     if not CONFIG.exists():
         if not EXAMPLE.exists():
             raise SystemExit(f"missing {EXAMPLE.name}; cannot create config.ini")
         shutil.copyfile(EXAMPLE, CONFIG)
         say(f"  created {CONFIG.name} from {EXAMPLE.name}")
 
-    values = {"token": token}
+    text = CONFIG.read_text(encoding="utf-8")
     if site_name:
-        values["siteName"] = site_name
-    CONFIG.write_text(
-        set_ini_values(CONFIG.read_text(encoding="utf-8"), "CloudFlare-API", values),
-        encoding="utf-8",
-    )
-    if os.name != "nt":  # the file holds an API token
-        CONFIG.chmod(0o600)
+        text = set_ini_values(text, "CloudFlare-API", {"siteName": site_name})
+
+    # The token now lives in .env; don't leave a stale copy behind in config.ini.
+    text, had_token = remove_ini_keys(text, "CloudFlare-API", {"token"})
+    CONFIG.write_text(text, encoding="utf-8")
+    if had_token:
+        say(f"  removed the old token line from {CONFIG.name}")
 
 
 # --- interactive steps ------------------------------------------------------
@@ -241,7 +300,7 @@ def do_install() -> int:
     say("=" * 46)
 
     if CONFIG.exists():
-        say(f"{CONFIG.name} already exists; its token and zone will be updated in place.")
+        say(f"{CONFIG.name} already exists; its zone will be updated in place.")
         say()
 
     token, api = prompt_token()
@@ -250,7 +309,8 @@ def do_install() -> int:
     finally:
         api.close()
 
-    write_config(token, site_name)
+    write_env(token)
+    write_config(site_name)
     minutes = prompt_frequency()
 
     if minutes:
@@ -293,8 +353,15 @@ def do_uninstall(purge: bool) -> int:
 
     logs = find_logs()  # resolved before config.ini can be deleted
 
+    if ENV_FILE.exists():
+        if purge or confirm(f"  delete {ENV_FILE.name}? It holds your API token."):
+            ENV_FILE.unlink()
+            say(f"  deleted {ENV_FILE.name}")
+        else:
+            say(f"  kept {ENV_FILE.name}")
+
     if CONFIG.exists():
-        if purge or confirm(f"  delete {CONFIG.name}? It holds your API token."):
+        if purge or confirm(f"  delete {CONFIG.name}?"):
             CONFIG.unlink()
             say(f"  deleted {CONFIG.name}")
         else:

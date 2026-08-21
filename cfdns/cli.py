@@ -11,7 +11,7 @@ import sys
 from typing import Sequence
 
 from cfdns.cloudflare import Cloudflare
-from cfdns.config import Config, ConfigError, load
+from cfdns.config import ENV_FILENAME, TOKEN_ENV_VAR, Config, ConfigError, load
 from cfdns.sync import sync
 
 LOG_LEVELS = {1: logging.ERROR, 2: logging.INFO, 3: logging.DEBUG}
@@ -56,6 +56,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     setup_logging(cfg, verbose=args.verbose)
+
+    if cfg.token_source == "config.ini":
+        logging.warning(
+            "your API token is still in config.ini. Move it to %s as %s=... "
+            "and delete the [CloudFlare-API] token line.",
+            cfg.source.parent / ENV_FILENAME,
+            TOKEN_ENV_VAR,
+        )
 
     with Cloudflare(cfg.token) as api:
         failures = sync(cfg, api)

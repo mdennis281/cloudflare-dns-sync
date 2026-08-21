@@ -1,4 +1,4 @@
-from install import set_ini_values
+from install import remove_ini_keys, set_env_value, set_ini_values
 
 EXAMPLE = """# Copy this file to config.ini and fill it in.
 
@@ -71,3 +71,63 @@ def test_result_is_still_parseable_by_configparser(tmp_path):
     parser.read(path, encoding="utf-8")
     assert parser.get("CloudFlare-API", "token") == "abc123"
     assert parser.has_section("DNS:home.mydomain.com")
+
+
+# --- .env editing -----------------------------------------------------------
+
+def test_sets_the_token_in_an_env_file():
+    body = "# comment\nCLOUDFLARE_API_TOKEN=your-api-token-here\n"
+    result = set_env_value(body, "CLOUDFLARE_API_TOKEN", "real-token")
+    assert result == "# comment\nCLOUDFLARE_API_TOKEN=real-token\n"
+
+
+def test_keeps_other_variables_and_comments_in_the_env_file():
+    body = "# keep me\nOTHER=1\nCLOUDFLARE_API_TOKEN=old\nAFTER=2\n"
+    result = set_env_value(body, "CLOUDFLARE_API_TOKEN", "new")
+    assert result.splitlines() == ["# keep me", "OTHER=1", "CLOUDFLARE_API_TOKEN=new", "AFTER=2"]
+
+
+def test_appends_the_token_when_the_env_file_has_no_such_line():
+    result = set_env_value("OTHER=1\n", "CLOUDFLARE_API_TOKEN", "new")
+    assert result.splitlines() == ["OTHER=1", "CLOUDFLARE_API_TOKEN=new"]
+
+
+def test_handles_an_empty_env_file():
+    assert set_env_value("", "CLOUDFLARE_API_TOKEN", "new") == "CLOUDFLARE_API_TOKEN=new\n"
+
+
+def test_replaces_an_exported_token_line():
+    result = set_env_value("export CLOUDFLARE_API_TOKEN=old\n", "CLOUDFLARE_API_TOKEN", "new")
+    assert result == "CLOUDFLARE_API_TOKEN=new\n"
+
+
+def test_collapses_duplicate_token_lines():
+    body = "CLOUDFLARE_API_TOKEN=one\nOTHER=x\nCLOUDFLARE_API_TOKEN=two\n"
+    result = set_env_value(body, "CLOUDFLARE_API_TOKEN", "new")
+    assert result.splitlines() == ["CLOUDFLARE_API_TOKEN=new", "OTHER=x"]
+
+
+# --- removing the legacy token from config.ini ------------------------------
+
+def test_removes_a_legacy_token_line_from_config_ini():
+    text = "[CloudFlare-API]\ntoken = secret\nsiteName = example.com\n\n[DNS]\nproxied = False\n"
+    result, removed = remove_ini_keys(text, "CloudFlare-API", {"token"})
+    assert removed is True
+    assert "secret" not in result
+    assert "siteName = example.com" in result
+    assert "[DNS]" in result
+
+
+def test_reports_when_there_was_no_legacy_token_line():
+    text = "[CloudFlare-API]\nsiteName = example.com\n"
+    result, removed = remove_ini_keys(text, "CloudFlare-API", {"token"})
+    assert removed is False
+    assert result.strip() == text.strip()
+
+
+def test_does_not_remove_a_token_key_from_another_section():
+    text = "[CloudFlare-API]\ntoken = secret\n\n[other]\ntoken = keep-me\n"
+    result, removed = remove_ini_keys(text, "CloudFlare-API", {"token"})
+    assert removed is True
+    assert "keep-me" in result
+    assert "secret" not in result
