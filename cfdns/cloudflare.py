@@ -1,5 +1,5 @@
 # Author: Michael Dennis (https://github.com/mdennis281)
-# Project Repository: https://github.com/mdennis281/Python-Cloudflare-DNS-External-IP-Synchronizer
+# Project Repository: https://github.com/mdennis281/cloudflare-dns-sync
 # License: MIT (https://en.wikipedia.org/wiki/MIT_License)
 """A very small Cloudflare API v4 client: zone lookup and DNS record CRUD."""
 

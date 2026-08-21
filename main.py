@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Author: Michael Dennis (https://github.com/mdennis281)
 # Created: 09-26-2019
-# Project Repository: https://github.com/mdennis281/Python-Cloudflare-DNS-External-IP-Synchronizer
+# Project Repository: https://github.com/mdennis281/cloudflare-dns-sync
 # License: MIT (https://en.wikipedia.org/wiki/MIT_License)
 """Entry point for running straight from a checkout (cron, Task Scheduler, ...).
 

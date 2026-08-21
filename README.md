@@ -1,6 +1,6 @@
 # Cloudflare DNS External IP Synchronizer (Python)
 
-This awkwardly named repository will synchronize Cloudflare DNS records with your current public IP address.
+This repository will synchronize Cloudflare DNS records with your current public IP address.
 
 I created this as a solution to the annoyingly short DHCP leases handed out by my ISP. Personally, I use it to set A records on a few of my site's subdomains — allowing me to RDP into my machine by hostname, without having to worry about whether or not my external IP changed.
 
@@ -21,16 +21,16 @@ token, checks the token actually works, and offers to schedule the sync.
 
 **Linux / macOS**
 ```bash
-git clone https://github.com/mdennis281/Python-Cloudflare-DNS-External-IP-Synchronizer.git
-cd Python-Cloudflare-DNS-External-IP-Synchronizer
+git clone https://github.com/mdennis281/cloudflare-dns-sync.git
+cd cloudflare-dns-sync
 chmod +x setup.sh
 ./setup.sh
 ```
 
 **Windows (PowerShell)**
 ```powershell
-git clone https://github.com/mdennis281/Python-Cloudflare-DNS-External-IP-Synchronizer.git
-cd Python-Cloudflare-DNS-External-IP-Synchronizer
+git clone https://github.com/mdennis281/cloudflare-dns-sync.git
+cd cloudflare-dns-sync
 .\setup.ps1
 ```
 > If PowerShell blocks the script, either run

@@ -16,7 +16,7 @@ dependencies = ["requests>=2.32.0", "pydantic>=2.7"]
 dev = ["pytest>=8"]
 
 [project.urls]
-Repository = "https://github.com/mdennis281/Python-Cloudflare-DNS-External-IP-Synchronizer"
+Repository = "https://github.com/mdennis281/cloudflare-dns-sync"
 
 [project.scripts]
 cf-dns-sync = "cfdns.cli:main"
