@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cf-dns-sync"
+version = "2.0.0"
+description = "Keep Cloudflare DNS records in sync with your public IP address"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Michael Dennis", email = "mdennis281@gmail.com" }]
+requires-python = ">=3.9"
+dependencies = ["requests>=2.32.0", "pydantic>=2.7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Repository = "https://github.com/mdennis281/Python-Cloudflare-DNS-External-IP-Synchronizer"
+
+[project.scripts]
+cf-dns-sync = "cfdns.cli:main"
+
+[tool.setuptools]
+packages = ["cfdns"]
+
+[tool.pytest.ini_options]
+# so tests can import both cfdns/ and the top-level install.py
+pythonpath = ["."]
+testpaths = ["tests"]

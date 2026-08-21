@@ -1,2 +1,11 @@
 *.pyc
 *.pyo
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.worktrees/
+.venv/
+config.ini
+CF-DNS.log

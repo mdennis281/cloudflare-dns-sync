@@ -1,0 +1,24 @@
+# .dispatch/ — self-contained, committable Dispatch config for this repo.
+# Discovered + loaded by Dispatch as the SOURCE OF TRUTH for authored config;
+# .data keeps only runtime state (chats, sessions, checkpoints). Safe to commit.
+name: cloudflare-dns-sync
+worktreeRoot: .worktrees
+workflow:
+  profile: none
+
+instructions:
+  - running-the-sync
+
+subApps:
+  # One-shot CLI, not a service: it reads the public IP, PUTs the Cloudflare
+  # record if it drifted, and exits. No port, no URL, no build step.
+  # Scheduled externally (Task Scheduler / cron) — see README.
+  - id: sync
+    name: DNS Sync CLI
+    cwd: .
+    # requirements.txt pins urllib3 1.25.11, which cannot import on Python 3.12+
+    # (`urllib3.packages.six.moves` is gone). 3.11 is the newest that works.
+    install: py -3.11 -m venv .venv && .venv/Scripts/python.exe -m pip install -r requirements.txt
+    # Must run with cwd = repo root: src/config.py reads `config.ini` relative
+    # to the working directory, not to the package.
+    dev: .venv/Scripts/python.exe main.py
