@@ -20,7 +20,7 @@ import sys
 from configparser import ConfigParser
 from pathlib import Path
 
-from cfdns import schedule
+from cfdns import logfile, schedule
 from cfdns.cloudflare import Cloudflare, CloudflareError
 from cfdns.config import TOKEN_ENV_VAR
 
@@ -268,8 +268,15 @@ def prompt_frequency() -> int:
 
 
 def find_logs() -> list[Path]:
-    """Log files to offer to delete, including one logPath points outside the project."""
-    logs = set(ROOT.glob("*.log"))
+    """Log files to offer to delete.
+
+    That means the live log, whatever rotation left beside it, and a log that
+    logPath points at outside the project directory.
+    """
+    logs = set()
+    for live in ROOT.glob("*.log"):
+        logs.add(live)
+        logs.update(logfile.leftovers(live))
 
     if CONFIG.exists():
         parser = ConfigParser()
@@ -284,6 +291,7 @@ def find_logs() -> list[Path]:
                 configured = CONFIG.parent / configured
             if configured.is_file():
                 logs.add(configured)
+            logs.update(logfile.leftovers(configured))
 
     return sorted(logs)
 

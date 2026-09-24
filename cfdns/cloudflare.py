@@ -12,6 +12,8 @@ import requests
 from requests.adapters import HTTPAdapter, Retry
 
 API_URL = "https://api.cloudflare.com/client/v4"
+PAGE_SIZE = 100  # Cloudflare's maximum for dns_records
+MAX_PAGES = 100  # a zone with 10,000 records is a misconfiguration, not a walk
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +97,19 @@ class Cloudflare:
         return next(
             (r for r in records if r["name"] == name and r["type"] == type), None
         )
+
+    def list_records(self, zone_id: str, type: str = "") -> list[dict[str, Any]]:
+        """Every record in the zone, optionally of one type. Used by wildcards."""
+        records: list[dict[str, Any]] = []
+        for page in range(1, MAX_PAGES + 1):
+            params: dict[str, Any] = {"per_page": PAGE_SIZE, "page": page}
+            if type:
+                params["type"] = type
+            batch = self._call("GET", f"zones/{zone_id}/dns_records", params=params) or []
+            records += batch
+            if len(batch) < PAGE_SIZE:
+                break
+        return records
 
     def create_record(self, zone_id: str, payload: dict[str, Any]) -> None:
         self._call("POST", f"zones/{zone_id}/dns_records", json=payload)

@@ -1,6 +1,6 @@
 import pytest
 
-from cfdns.config import ConfigError, Record, load
+from cfdns.config import ConfigError, Record, load, parse_size
 
 BASE = """
 [CloudFlare-API]
@@ -78,3 +78,85 @@ def test_missing_config_file_is_an_error(tmp_path):
 def test_relative_log_path_resolves_next_to_config(tmp_path):
     cfg = load(write(tmp_path, "\n[DNS:a.example.com]\n\n[general]\nlogPath = logs/cf.log\n"))
     assert cfg.resolved_log_path() == tmp_path / "logs" / "cf.log"
+
+
+# --- log rotation -----------------------------------------------------------
+
+RECORD = "\n[DNS:a.example.com]\n\n[general]\n"
+
+
+def test_rotation_defaults_to_five_one_megabyte_files(tmp_path):
+    cfg = load(write(tmp_path, "\n[DNS:a.example.com]\n"))
+    assert (cfg.log_rotate, cfg.log_max_size, cfg.log_backups) == ("size", 1024 * 1024, 5)
+
+
+def test_rotation_settings_are_read_from_the_general_section(tmp_path):
+    cfg = load(write(tmp_path, RECORD + "logRotation = Daily\nlogMaxSize = 5 MB\nlogBackups = 30\n"))
+    assert cfg.log_rotate == "daily"
+    assert cfg.log_max_size == 5 * 1024 * 1024
+    assert cfg.log_backups == 30
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("1024", 1024),
+        ("4096b", 4096),
+        ("2KB", 2048),
+        ("512 kib", 512 * 1024),
+        ("5MB", 5 * 1024 ** 2),
+        ("1.5mb", int(1.5 * 1024 ** 2)),
+        ("1gb", 1024 ** 3),
+    ],
+)
+def test_a_log_size_may_be_bytes_or_carry_a_suffix(text, expected):
+    assert parse_size(text) == expected
+
+
+def test_an_unknown_rotation_mode_is_an_error(tmp_path):
+    with pytest.raises(ConfigError, match="logRotation must be one of"):
+        load(write(tmp_path, RECORD + "logRotation = hourly\n"))
+
+
+def test_a_log_size_that_is_not_a_size_is_an_error(tmp_path):
+    with pytest.raises(ConfigError, match="is not a size"):
+        load(write(tmp_path, RECORD + "logMaxSize = banana\n"))
+
+
+def test_a_pointlessly_small_log_size_is_an_error(tmp_path):
+    with pytest.raises(ConfigError, match="at least 1024 bytes"):
+        load(write(tmp_path, RECORD + "logMaxSize = 100\n"))
+
+
+def test_a_negative_backup_count_is_an_error(tmp_path):
+    with pytest.raises(ConfigError, match="logBackups must be between"):
+        load(write(tmp_path, RECORD + "logBackups = -1\n"))
+
+
+def test_a_backup_count_that_is_not_a_number_is_an_error(tmp_path):
+    with pytest.raises(ConfigError, match="invalid literal"):
+        load(write(tmp_path, RECORD + "logBackups = lots\n"))
+
+
+
+def test_wildcard_section_loads_as_a_pattern(tmp_path):
+    cfg = load(write(tmp_path, "\n[DNS:*.test.example.com]\nrecordType = A\n"))
+    record = cfg.records[0]
+    assert record.name == "*.test.example.com"
+    assert record.is_pattern and record.is_creatable_wildcard
+
+
+def test_a_mid_label_wildcard_is_a_pattern_but_not_creatable(tmp_path):
+    cfg = load(write(tmp_path, "\n[DNS:dev-*.example.com]\n"))
+    record = cfg.records[0]
+    assert record.is_pattern and not record.is_creatable_wildcard
+
+
+def test_a_wildcard_outside_its_zone_is_an_error(tmp_path):
+    with pytest.raises(ConfigError, match="must end with its zone"):
+        load(write(tmp_path, "\n[DNS:*.other.com]\n"))
+
+
+def test_a_bare_wildcard_is_an_error(tmp_path):
+    with pytest.raises(ConfigError, match="must end with its zone"):
+        load(write(tmp_path, "\n[DNS:*]\n"))

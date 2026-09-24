@@ -24,6 +24,13 @@ class FakeCloudflare:
     def find_record(self, zone_id, name, type):
         return self.existing.get((name, type))
 
+    def list_records(self, zone_id, type=""):
+        return [
+            dict(record, name=name, type=rtype)
+            for (name, rtype), record in self.existing.items()
+            if not type or rtype == type
+        ]
+
     def create_record(self, zone_id, payload):
         self.created.append(payload)
 
@@ -129,4 +136,90 @@ def test_non_ip_record_type_is_reported_as_a_failure():
     cfg = make_config(Record(name="home.example.com", type="CNAME"))
 
     assert sync(cfg, api, fake_lookup) == 1
+    assert api.created == []
+
+
+def test_wildcard_updates_every_matching_record():
+    api = FakeCloudflare({
+        ("a.test.example.com", "A"): {"id": "r1", "content": "198.51.100.1"},
+        ("b.test.example.com", "A"): {"id": "r2", "content": "198.51.100.2"},
+        ("deep.b.test.example.com", "A"): {"id": "r3", "content": "198.51.100.3"},
+        ("other.example.com", "A"): {"id": "r4", "content": "198.51.100.4"},
+    })
+    cfg = make_config(Record(name="*.test.example.com"))
+
+    assert sync(cfg, api, fake_lookup) == 0
+    assert sorted(p["name"] for _, p in api.updated) == [
+        "a.test.example.com", "b.test.example.com", "deep.b.test.example.com",
+    ]
+    assert api.created == []
+
+
+def test_wildcard_matches_case_insensitively_and_skips_current_records():
+    api = FakeCloudflare({
+        ("A.Test.Example.com", "A"): {"id": "r1", "content": "198.51.100.1"},
+        ("b.test.example.com", "A"): {"id": "r2", "content": IP},
+    })
+    cfg = make_config(Record(name="*.TEST.example.com"))
+
+    assert sync(cfg, api, fake_lookup) == 0
+    assert [p["name"] for _, p in api.updated] == ["A.Test.Example.com"]
+
+
+def test_wildcard_ignores_other_record_types():
+    api = FakeCloudflare({
+        ("a.test.example.com", "AAAA"): {"id": "r1", "content": "2606:4700::1"},
+        ("b.test.example.com", "A"): {"id": "r2", "content": "198.51.100.2"},
+    })
+    cfg = make_config(Record(name="*.test.example.com"))
+
+    sync(cfg, api, fake_lookup)
+    assert [p["name"] for _, p in api.updated] == ["b.test.example.com"]
+
+
+def test_wildcard_keeps_each_records_own_proxy_and_ttl():
+    api = FakeCloudflare({
+        ("a.test.example.com", "A"): {"id": "r1", "content": "198.51.100.1", "proxied": True, "ttl": 1},
+        ("b.test.example.com", "A"): {"id": "r2", "content": "198.51.100.2", "proxied": False, "ttl": 300},
+    })
+    cfg = make_config(Record(name="*.test.example.com", proxied=False, ttl=120))
+
+    sync(cfg, api, fake_lookup)
+    by_name = {p["name"]: p for _, p in api.updated}
+    assert by_name["a.test.example.com"]["proxied"] is True
+    assert by_name["b.test.example.com"]["ttl"] == 300
+
+
+def test_wildcard_creates_the_real_wildcard_record_when_nothing_matches():
+    api = FakeCloudflare()
+    cfg = make_config(Record(name="*.lanscape.app", zone="lanscape.app"))
+
+    assert sync(cfg, api, fake_lookup) == 0
+    assert api.created == [
+        {"type": "A", "name": "*.lanscape.app", "content": IP, "proxied": False, "ttl": 1}
+    ]
+
+
+def test_wildcard_updates_an_existing_wildcard_record_instead_of_duplicating_it():
+    api = FakeCloudflare({("*.lanscape.app", "A"): {"id": "w1", "content": "198.51.100.9"}})
+    cfg = make_config(Record(name="*.lanscape.app", zone="lanscape.app"))
+
+    sync(cfg, api, fake_lookup)
+    assert api.created == []
+    assert api.updated[0][0] == "w1"
+
+
+def test_wildcard_creates_nothing_when_create_record_is_off():
+    api = FakeCloudflare()
+    cfg = make_config(Record(name="*.lanscape.app", zone="lanscape.app", create=False))
+
+    assert sync(cfg, api, fake_lookup) == 0
+    assert api.created == []
+
+
+def test_mid_label_pattern_matches_but_is_never_created():
+    api = FakeCloudflare()
+    cfg = make_config(Record(name="dev-*.example.com"))
+
+    assert sync(cfg, api, fake_lookup) == 0
     assert api.created == []

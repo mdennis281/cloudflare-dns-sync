@@ -10,20 +10,45 @@ section. ``[DNS]`` doubles as the defaults for every ``[DNS:...]`` section.
 from __future__ import annotations
 
 import os
+import re
 from configparser import ConfigParser
 from pathlib import Path
 
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
+from cfdns import logfile
+
 CONFIG_ENV_VAR = "CF_DNS_CONFIG"
 TOKEN_ENV_VAR = "CLOUDFLARE_API_TOKEN"
 ENV_FILENAME = ".env"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+SIZE_UNITS = {
+    "": 1, "b": 1,
+    "k": 1024, "kb": 1024, "kib": 1024,
+    "m": 1024 ** 2, "mb": 1024 ** 2, "mib": 1024 ** 2,
+    "g": 1024 ** 3, "gb": 1024 ** 3, "gib": 1024 ** 3,
+}
+MIN_LOG_SIZE = 1024  # a smaller ceiling than this rotates on every other line
+
 
 class ConfigError(Exception):
     """config.ini is missing, unreadable, or incomplete."""
+
+
+def parse_size(value: object) -> int:
+    """Turn ``5MB``, ``512 kb`` or ``1048576`` into a byte count."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+
+    text = str(value).strip().lower().replace(" ", "")
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([a-z]*)", text)
+    if not match or match.group(2) not in SIZE_UNITS:
+        raise ValueError(
+            f"{value!r} is not a size. Give bytes, or a suffix: 512KB, 5MB, 1GB."
+        )
+    return int(float(match.group(1)) * SIZE_UNITS[match.group(2)])
 
 
 class Record(BaseModel):
@@ -37,6 +62,21 @@ class Record(BaseModel):
     ttl: int = 1  # 1 means "automatic" to Cloudflare
     zone: str = ""  # empty falls back to Config.site_name
     create: bool = True
+
+    @property
+    def is_pattern(self) -> bool:
+        """True for a wildcard name like ``*.lanscape.app`` or ``dev-*.example.com``."""
+        return "*" in self.name
+
+    @property
+    def is_creatable_wildcard(self) -> bool:
+        """True when Cloudflare would accept this pattern as a real record.
+
+        Cloudflare only stores a wildcard as the leftmost label, so
+        ``*.lanscape.app`` can be created but ``dev-*.lanscape.app`` can only
+        ever match records that already exist.
+        """
+        return self.name.startswith("*.") and "*" not in self.name[2:]
 
     @field_validator("name", "zone", "type", mode="before")
     @classmethod
@@ -68,11 +108,45 @@ class Config(BaseModel):
     log_enabled: bool = True
     log_level: int = 2
     log_path: str = "CF-DNS.log"
+    log_rotate: str = logfile.SIZE
+    log_max_size: int = logfile.DEFAULT_MAX_SIZE
+    log_backups: int = logfile.DEFAULT_BACKUPS
 
     @field_validator("token", "site_name", "log_path", mode="before")
     @classmethod
     def _strip(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("log_rotate", mode="before")
+    @classmethod
+    def _known_rotation(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        mode = value.strip().lower()
+        if mode not in logfile.MODES:
+            raise ValueError(
+                f"logRotation must be one of {', '.join(logfile.MODES)}, not {value.strip()!r}"
+            )
+        return mode
+
+    @field_validator("log_max_size", mode="before")
+    @classmethod
+    def _as_bytes(cls, value: object) -> object:
+        return parse_size(value)
+
+    @field_validator("log_max_size")
+    @classmethod
+    def _big_enough(cls, value: int) -> int:
+        if value < MIN_LOG_SIZE:
+            raise ValueError(f"logMaxSize must be at least {MIN_LOG_SIZE} bytes (1KB)")
+        return value
+
+    @field_validator("log_backups")
+    @classmethod
+    def _sane_backup_count(cls, value: int) -> int:
+        if not 0 <= value <= 1000:
+            raise ValueError("logBackups must be between 0 and 1000")
+        return value
 
     @model_validator(mode="after")
     def _check(self) -> "Config":
@@ -98,6 +172,14 @@ class Config(BaseModel):
                     f'{record.name}: no zone. Set [CloudFlare-API] siteName, '
                     'or "zone" on the record.'
                 )
+            if record.is_pattern:
+                zone = self.zone_for(record)
+                lowered = record.name.lower()
+                if not (lowered.endswith("." + zone.lower()) or lowered == zone.lower()):
+                    raise ValueError(
+                        f"{record.name}: a wildcard name must end with its zone "
+                        f'("*.{zone}" or "*.sub.{zone}"), not match the whole account'
+                    )
             key = (record.name, record.type)
             if key in seen:
                 raise ValueError(f"{record.name} is configured twice as a {record.type} record")
@@ -214,6 +296,9 @@ def load(explicit: str | os.PathLike[str] | None = None) -> Config:
             log_enabled=parser.getboolean("general", "loggingEnabled", fallback=True),
             log_level=parser.getint("general", "logLevel", fallback=2),
             log_path=parser.get("general", "logPath", fallback="CF-DNS.log"),
+            log_rotate=parser.get("general", "logRotation", fallback=logfile.SIZE),
+            log_max_size=parser.get("general", "logMaxSize", fallback=logfile.DEFAULT_MAX_SIZE),
+            log_backups=parser.getint("general", "logBackups", fallback=logfile.DEFAULT_BACKUPS),
         )
     except ValidationError as err:
         raise ConfigError(_first_error(err)) from err

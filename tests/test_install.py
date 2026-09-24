@@ -1,4 +1,5 @@
-from install import remove_ini_keys, set_env_value, set_ini_values
+import install
+from install import find_logs, remove_ini_keys, set_env_value, set_ini_values
 
 EXAMPLE = """# Copy this file to config.ini and fill it in.
 
@@ -131,3 +132,43 @@ def test_does_not_remove_a_token_key_from_another_section():
     assert removed is True
     assert "keep-me" in result
     assert "secret" not in result
+
+
+# --- the logs uninstall offers to delete ------------------------------------
+
+def touch(directory, *names):
+    for name in names:
+        (directory / name).write_text("", encoding="utf-8")
+
+
+def test_uninstall_finds_rotated_logs_and_the_lock_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(install, "ROOT", tmp_path)
+    monkeypatch.setattr(install, "CONFIG", tmp_path / "config.ini")
+    touch(
+        tmp_path,
+        "CF-DNS.log",
+        "CF-DNS.log.1",
+        "CF-DNS.log.2026-08-21",
+        "CF-DNS.log.lock",
+        "notes.txt",  # not ours; leave it be
+    )
+
+    assert [p.name for p in find_logs()] == [
+        "CF-DNS.log",
+        "CF-DNS.log.1",
+        "CF-DNS.log.2026-08-21",
+        "CF-DNS.log.lock",
+    ]
+
+
+def test_uninstall_follows_a_log_path_pointing_outside_the_project(tmp_path, monkeypatch):
+    project, elsewhere = tmp_path / "project", tmp_path / "logs"
+    project.mkdir()
+    elsewhere.mkdir()
+    config = project / "config.ini"
+    config.write_text(f"[general]\nlogPath = {elsewhere / 'cf.log'}\n", encoding="utf-8")
+    monkeypatch.setattr(install, "ROOT", project)
+    monkeypatch.setattr(install, "CONFIG", config)
+    touch(elsewhere, "cf.log", "cf.log.1", "cf.log.lock")
+
+    assert [p.name for p in find_logs()] == ["cf.log", "cf.log.1", "cf.log.lock"]

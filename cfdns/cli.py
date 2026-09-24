@@ -12,6 +12,7 @@ from typing import Sequence
 
 from cfdns.cloudflare import Cloudflare
 from cfdns.config import ENV_FILENAME, TOKEN_ENV_VAR, Config, ConfigError, load
+from cfdns.logfile import RotatingLogHandler
 from cfdns.sync import sync
 
 LOG_LEVELS = {1: logging.ERROR, 2: logging.INFO, 3: logging.DEBUG}
@@ -26,7 +27,14 @@ def setup_logging(cfg: Config, verbose: bool = False) -> None:
     if cfg.log_enabled:
         log_path = cfg.resolved_log_path()
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+        handlers.append(
+            RotatingLogHandler(
+                log_path,
+                mode=cfg.log_rotate,
+                max_size=cfg.log_max_size,
+                backups=cfg.log_backups,
+            )
+        )
 
     logging.basicConfig(
         level=logging.DEBUG if verbose else LOG_LEVELS.get(cfg.log_level, logging.INFO),

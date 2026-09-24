@@ -12,7 +12,8 @@ I created this as a solution to the annoyingly short DHCP leases handed out by m
 - Creates records that don't exist yet, and leaves already-correct records alone
 - A failure on one record doesn't stop the others
 - Installs its own schedule (Task Scheduler or cron), and removes it again on uninstall
-- Logging
+- Logging, with rotation that holds up when two runs overlap — same on Linux and Windows,
+  no `logrotate` to configure
 
 ## Quick start
 
@@ -125,6 +126,9 @@ recordType = AAAA
 [DNS:nas.otherdomain.com]
 zone = otherdomain.com
 
+; every A record under test.mydomain.com, however many there are
+[DNS:*.test.mydomain.com]
+
 ; defaults inherited by all of the above
 [DNS]
 recordType = A
@@ -136,6 +140,9 @@ ttl = 1
 loggingEnabled = True
 logPath = CF-DNS.log
 logLevel = 2
+logRotation = size
+logMaxSize = 1MB
+logBackups = 5
 ```
 
 ### Record settings
@@ -147,12 +154,75 @@ logLevel = 2
 | `zone` | `siteName` | Which zone this record lives in |
 | `createRecord` | `True` | Create the record if it doesn't exist yet |
 
+### Wildcards
+
+A name containing `*` is a pattern rather than a hostname. Every existing record of
+the same type whose name matches is pointed at your public IP, so one section can
+cover a whole subtree:
+
+```ini
+[DNS:*.test.mydomain.com]
+[DNS:*.lanscape.app]
+zone = lanscape.app
+```
+
+`*` spans any number of labels, so `*.test.mydomain.com` covers
+`app.test.mydomain.com` and `one.two.test.mydomain.com` alike — plus the Cloudflare
+wildcard record `*.test.mydomain.com` itself, if the zone has one. `*` can also sit
+inside a label: `[DNS:dev-*.mydomain.com]`.
+
+Matching is case-insensitive, and the pattern has to end with its own zone —
+`[DNS:*]` is rejected rather than quietly claiming everything.
+
+- Matched records **keep their own `proxied` and `ttl`**; only the IP is rewritten.
+  Those keys apply to a record this tool creates itself.
+- `createRecord` has something to create only when nothing matched *and* the pattern
+  is a real Cloudflare wildcard (`*.` as the leftmost label). A pattern that matches
+  nothing else is a logged no-op.
+- A wildcard claims **every** matching `A`/`AAAA` record in the zone, including any
+  you deliberately pointed elsewhere.
+
 ### General settings
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `loggingEnabled` | `True` | Write to the log file and stdout. `False` runs silently |
 | `logPath` | `CF-DNS.log` | Relative paths resolve against the config file's directory |
 | `logLevel` | `2` | `1` errors, `2` info, `3` debug |
+| `logRotation` | `size` | `size`, `daily`, or `off` |
+| `logMaxSize` | `1MB` | `size` rotation only. Bytes, or a suffix: `512KB`, `5MB`, `1GB` |
+| `logBackups` | `5` | Old logs to keep. `0` discards the old log instead of keeping it |
+
+### Log rotation
+
+Rotation is handled in-process, identically on both platforms — there's no
+`logrotate` unit to write on Linux and nothing extra to install on Windows.
+
+`logRotation = size` (the default) keeps the live log under `logMaxSize` and
+shifts the old ones down, so `.1` is always the most recent:
+
+```
+CF-DNS.log      CF-DNS.log.1      CF-DNS.log.2   ...   CF-DNS.log.5
+```
+
+`logRotation = daily` starts a fresh file on the first run of a new day and
+names the archive after the day it covers:
+
+```
+CF-DNS.log      CF-DNS.log.2026-08-20      CF-DNS.log.2026-08-19
+```
+
+Either way `logBackups` old files are kept and the rest are deleted, so the
+worst case is bounded: `size` costs at most `logMaxSize × (logBackups + 1)`.
+`logRotation = off` disables rotation and lets the file grow forever.
+
+Because the sync is scheduled, a slow run and the next one can overlap and
+both write the same file. Rotation is decided while holding an exclusive lock
+on a `CF-DNS.log.lock` file beside the log, and re-checked against what's
+actually on disk, so two runs can't both rotate the same file — and neither
+ends up appending to a file that has already been rotated away. That last part
+is the one that bites on Windows, where the rename fails outright if anyone
+else has the file open. The lock file is created automatically and cleaned up
+by `--uninstall`.
 
 ### Where config.ini is looked for
 In order: `--config <path>`, the `CF_DNS_CONFIG` environment variable, the project root

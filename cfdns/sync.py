@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+import fnmatch
 import logging
-from typing import Callable
+from typing import Any, Callable
 
 from cfdns.cloudflare import Cloudflare, CloudflareError
 from cfdns.config import Config, ConfigError, Record
@@ -56,15 +57,13 @@ def _sync_record(
     ip = ip_cache[family]
 
     zone_id = api.zone_id(cfg.zone_for(record))
+
+    if record.is_pattern:
+        _sync_pattern(api, record, zone_id, ip)
+        return
+
     existing = api.find_record(zone_id, record.name, record.type)
-    payload = {
-        "type": record.type,
-        "name": record.name,
-        "content": ip,
-        "proxied": record.proxied,
-        # Cloudflare requires ttl=1 ("automatic") on proxied records.
-        "ttl": 1 if record.proxied else record.ttl,
-    }
+    payload = _payload(record, record.name, ip)
 
     if existing is None:
         if not record.create:
@@ -80,3 +79,72 @@ def _sync_record(
         )
     else:
         log.debug("%s: already points at %s", record.name, ip)
+
+
+def _payload(record: Record, name: str, ip: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build the PUT/POST body.
+
+    A wildcard section describes many records that were set up individually,
+    so their own proxy and TTL settings win -- only the IP is ours to change.
+    ``existing`` is passed for exactly that case.
+    """
+    proxied = record.proxied if existing is None else bool(existing.get("proxied", False))
+    ttl = record.ttl if existing is None else int(existing.get("ttl", 1) or 1)
+    return {
+        "type": record.type,
+        "name": name,
+        "content": ip,
+        "proxied": proxied,
+        # Cloudflare requires ttl=1 ("automatic") on proxied records.
+        "ttl": 1 if proxied else ttl,
+    }
+
+
+def matches(pattern: str, name: str) -> bool:
+    """Glob-match a DNS name, case-insensitively.
+
+    ``*`` spans any number of labels, so ``*.test.example.com`` covers
+    ``a.test.example.com`` and ``a.b.test.example.com`` alike -- and the
+    Cloudflare wildcard record ``*.test.example.com`` itself.
+    """
+    return fnmatch.fnmatchcase(name.lower(), pattern.lower())
+
+
+def _sync_pattern(api: Cloudflare, record: Record, zone_id: str, ip: str) -> None:
+    """Point every existing record matching the pattern at the current IP."""
+    found = [
+        existing
+        for existing in api.list_records(zone_id, record.type)
+        if matches(record.name, existing.get("name", ""))
+    ]
+
+    if not found:
+        if not record.create:
+            log.info("%s: matched no records. Set createRecord = True to have it created.", record.name)
+        elif record.is_creatable_wildcard:
+            api.create_record(zone_id, _payload(record, record.name, ip))
+            log.info("%s: created wildcard %s record pointing at %s", record.name, record.type, ip)
+        else:
+            # Cloudflare stores a wildcard only as the leftmost label, so
+            # there is nothing this pattern could be turned into.
+            log.info(
+                "%s: matched no records, and Cloudflare cannot create a record from "
+                "this pattern (only *.name is a real wildcard).",
+                record.name,
+            )
+        return
+
+    changed = 0
+    for existing in found:
+        name = existing["name"]
+        if existing.get("content") == ip:
+            log.debug("%s: already points at %s (matched %s)", name, ip, record.name)
+            continue
+        api.update_record(zone_id, existing["id"], _payload(record, name, ip, existing))
+        changed += 1
+        log.info(
+            "%s: updated %s record to %s (was %s, matched %s)",
+            name, record.type, ip, existing.get("content"), record.name,
+        )
+
+    log.debug("%s: matched %d record(s), updated %d", record.name, len(found), changed)
