@@ -10,3 +10,6 @@ dist/
 config.ini
 .env
 CF-DNS.log
+CF-DNS.log.*
+*.log.lock
+.claude/
